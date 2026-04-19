@@ -1065,8 +1065,15 @@ if __name__ == '__main__':
     ssl_context = None
 
     if ssl_certfile and ssl_keyfile:
-        ssl_context = (ssl_certfile, ssl_keyfile)
-        logger.info('HTTPS enabled with cert=%s key=%s', ssl_certfile, ssl_keyfile)
+        if os.path.exists(ssl_certfile) and os.path.exists(ssl_keyfile):
+            ssl_context = (ssl_certfile, ssl_keyfile)
+            logger.info('HTTPS enabled with cert=%s key=%s', ssl_certfile, ssl_keyfile)
+        else:
+            logger.warning(
+                'SSL_CERTFILE or SSL_KEYFILE not found. Running without HTTPS. cert=%s key=%s',
+                ssl_certfile,
+                ssl_keyfile,
+            )
     else:
         logger.info('HTTPS disabled; running over HTTP')
     
