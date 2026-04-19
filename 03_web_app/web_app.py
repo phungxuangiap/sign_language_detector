@@ -1057,12 +1057,25 @@ def upload_video():
 if __name__ == '__main__':
     # Start WebSocket predict worker
     start_websocket_predict_worker()
+
+    host = os.environ.get('APP_HOST', '0.0.0.0')
+    port = int(os.environ.get('APP_PORT', '5000'))
+    ssl_certfile = os.environ.get('SSL_CERTFILE', '').strip()
+    ssl_keyfile = os.environ.get('SSL_KEYFILE', '').strip()
+    ssl_context = None
+
+    if ssl_certfile and ssl_keyfile:
+        ssl_context = (ssl_certfile, ssl_keyfile)
+        logger.info('HTTPS enabled with cert=%s key=%s', ssl_certfile, ssl_keyfile)
+    else:
+        logger.info('HTTPS disabled; running over HTTP')
     
     # Run Flask + SocketIO
     socketio.run(
         app,
-        host='0.0.0.0',
-        port=5000,
+        host=host,
+        port=port,
         debug=False,
-        allow_unsafe_werkzeug=True
+        allow_unsafe_werkzeug=True,
+        ssl_context=ssl_context
     )

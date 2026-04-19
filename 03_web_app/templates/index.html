@@ -547,9 +547,12 @@
                     <h3 class="card-title">Điều khiển Camera</h3>
                     <div class="btn-row">
                         <button id="startBtn" class="btn btn-start">Bắt đầu quay</button>
-                        <button id="stopBtn" class="btn btn-stop" onclick="stopCameraStream()" disabled>Dừng lại</button>
+                        <button id="stopBtn" class="btn btn-stop" disabled>Dừng lại</button>
                     </div>
                     <button id="permissionBtn" class="btn btn-tertiary" style="width: 100%; margin-top: 10px;">🔓 Yêu cầu truy cập camera</button>
+                    <div id="cameraNotice" class="upload-result" style="margin-top: 10px; min-height: auto; padding: 10px 12px; font-size: 0.9rem; text-transform: none; letter-spacing: 0;">
+                        Camera chỉ hoạt động trên HTTPS hoặc localhost.
+                    </div>
                 </div>
 
                 <div class="card upload-card">
@@ -667,6 +670,14 @@
         // Request browser camera permission
         async function requestCameraPermission() {
             try {
+                if (!window.isSecureContext) {
+                    throw new Error('Trình duyệt chỉ cho phép mở camera trên HTTPS hoặc localhost.');
+                }
+
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('Trình duyệt này không hỗ trợ getUserMedia().');
+                }
+
                 console.log('[Camera] Requesting permission...');
                 cameraStream = await navigator.mediaDevices.getUserMedia({
                     video: { 
@@ -687,11 +698,19 @@
                 cameraReady = true;
                 console.log('[Camera] Permission granted, stream initialized');
                 showNotification('Camera permission granted', 'success');
+                const notice = document.getElementById('cameraNotice');
+                if (notice) {
+                    notice.textContent = 'Camera sẵn sàng. Nếu không thấy hình, hãy kiểm tra quyền camera của trình duyệt.';
+                }
                 updateStatusBadge('connected');
                 return true;
             } catch (err) {
                 console.error('[Camera] Permission denied or error:', err);
                 showNotification(`Camera error: ${err.message}`, 'error');
+                const notice = document.getElementById('cameraNotice');
+                if (notice) {
+                    notice.textContent = err.message || 'Không thể mở camera trên môi trường hiện tại.';
+                }
                 return false;
             }
         }
@@ -758,6 +777,13 @@
         // Start camera stream
         async function startCameraStream() {
             console.log('[Camera] startCameraStream called');
+
+            if (!window.isSecureContext) {
+                showNotification('Camera chỉ chạy trên HTTPS hoặc localhost', 'error');
+                const notice = document.getElementById('cameraNotice');
+                if (notice) notice.textContent = 'Không thể mở camera trên HTTP. Hãy dùng HTTPS hoặc chạy local.';
+                return;
+            }
             
             if (!cameraReady) {
                 console.log('[Camera] Camera not ready, requesting permission...');
@@ -901,6 +927,17 @@
             if (!initSuccess) {
                 console.error('[Page] Failed to initialize camera elements!');
                 return;
+            }
+
+            const cameraNotice = document.getElementById('cameraNotice');
+            const cameraButtons = [document.getElementById('startBtn'), document.getElementById('stopBtn'), document.getElementById('permissionBtn')];
+            if (!window.isSecureContext) {
+                if (cameraNotice) {
+                    cameraNotice.textContent = 'Môi trường hiện tại không an toàn (HTTP). Camera sẽ không hoạt động cho tới khi chuyển sang HTTPS.';
+                }
+                cameraButtons.forEach(btn => {
+                    if (btn) btn.disabled = true;
+                });
             }
             
             // Verify canvas is in document
