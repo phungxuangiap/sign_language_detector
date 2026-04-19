@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Language AI - Web Realtime</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+        :root {
+            --bg-main: #0a0a0c;
+            --card-glass: rgba(23, 23, 27, 0.8);
+            --border-glass: rgba(255, 255, 255, 0.1);
+            --text-main: #f5f7ff;
+            --text-subtle: #9ea4c9;
+            --violet: #8b5cf6;
+            --cyan: #06b6d4;
+            --emerald: #10b981;
+            --emerald-dark: #059669;
+            --rose: #f43f5e;
+            --rose-dark: #e11d48;
+            --radius-xl: 24px;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            color: var(--text-main);
+            background:
+                radial-gradient(circle at 10% 20%, rgba(139, 92, 246, 0.25), transparent 30%),
+                radial-gradient(circle at 85% 0%, rgba(6, 182, 212, 0.2), transparent 25%),
+                radial-gradient(circle at 50% 90%, rgba(139, 92, 246, 0.12), transparent 35%),
+                var(--bg-main);
+            overflow-x: hidden;
+        }
+
+        .welcome-screen {
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background:
+                radial-gradient(circle at 30% 30%, rgba(139, 92, 246, 0.25), transparent 40%),
+                radial-gradient(circle at 70% 70%, rgba(6, 182, 212, 0.18), transparent 42%),
+                #09090b;
+            transition: opacity 0.55s ease, transform 0.55s ease, visibility 0.55s;
+        }
+
+        .welcome-screen::before,
+        .welcome-screen::after {
+            content: "";
+            position: absolute;
+            width: 320px;
+            height: 320px;
+            border-radius: 999px;
+            filter: blur(70px);
+            opacity: 0.5;
+            animation: drift 7s ease-in-out infinite alternate;
+            pointer-events: none;
+        }
+
+        .welcome-screen::before {
+            top: 10%;
+            left: 8%;
+            background: rgba(139, 92, 246, 0.45);
+        }
+
+        .welcome-screen::after {
+            bottom: 12%;
+            right: 10%;
+            background: rgba(6, 182, 212, 0.35);
+            animation-delay: 1.2s;
+        }
+
+        @keyframes drift {
+            from { transform: translateY(0px) translateX(0px); }
+            to { transform: translateY(-18px) translateX(12px); }
+        }
+
+        .welcome-screen.hidden {
+            opacity: 0;
+            transform: translateY(-30px) scale(0.98);
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .welcome-card {
+            width: min(920px, 100%);
+            position: relative;
+            z-index: 1;
+            padding: clamp(24px, 4vw, 48px);
+            border-radius: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background: rgba(14, 14, 20, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            text-align: center;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+        }
+
+        .welcome-tag {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(6, 182, 212, 0.16);
+            border: 1px solid rgba(6, 182, 212, 0.4);
+            color: #a5f3fc;
+            font-size: 0.8rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .welcome-title {
+            margin: 18px 0 10px;
+            font-size: clamp(2rem, 3.6vw, 3.8rem);
+            line-height: 1.08;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            background: linear-gradient(90deg, #e9d5ff, #a5b4fc 45%, #67e8f9);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .welcome-desc {
+            margin: 0 auto 28px;
+            max-width: 680px;
+            color: var(--text-subtle);
+            font-size: clamp(0.96rem, 1.6vw, 1.08rem);
+            line-height: 1.7;
+        }
+
+        .hero-cta {
+            border: 0;
+            border-radius: 14px;
+            cursor: pointer;
+            padding: 14px 24px;
+            font-size: 1rem;
+            font-weight: 800;
+            color: white;
+            letter-spacing: 0.04em;
+            background: linear-gradient(120deg, var(--violet), var(--cyan));
+            box-shadow: 0 0 0 rgba(139, 92, 246, 0), 0 14px 30px rgba(139, 92, 246, 0.35);
+            transition: transform 0.22s ease, box-shadow 0.22s ease;
+        }
+
+        .hero-cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 22px rgba(139, 92, 246, 0.55), 0 20px 32px rgba(6, 182, 212, 0.28);
+        }
+
+        .app-shell {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+            opacity: 1;
+            transform: translateY(0);
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+
+        .app-shell.is-hidden {
+            opacity: 0;
+            transform: translateY(16px);
+            pointer-events: none;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .topbar h1 {
+            margin: 0;
+            font-size: clamp(1.5rem, 2vw, 2.1rem);
+            font-weight: 800;
+            background: linear-gradient(92deg, #c4b5fd, #22d3ee);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .subtitle {
+            margin: 0;
+            color: var(--text-subtle);
+            font-size: 0.9rem;
+            text-align: right;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+            gap: 18px;
+            align-items: start;
+        }
+
+        .card {
+            background: var(--card-glass);
+            border: 1px solid var(--border-glass);
+            border-radius: var(--radius-lg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: 0 16px 38px rgba(0, 0, 0, 0.35);
+        }
+
+        .video-card {
+            padding: 14px;
+            transition: box-shadow 0.22s ease;
+        }
+
+        .video-card.active {
+            box-shadow:
+                0 0 0 1px rgba(6, 182, 212, 0.35),
+                0 0 26px rgba(139, 92, 246, 0.26),
+                0 20px 45px rgba(0, 0, 0, 0.45);
+        }
+
+        .video-container {
+            width: 100%;
+            aspect-ratio: 16 / 10;
+            border-radius: var(--radius-xl);
+            overflow: hidden;
+            position: relative;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background:
+                linear-gradient(140deg, rgba(139, 92, 246, 0.2), transparent 25%),
+                linear-gradient(320deg, rgba(6, 182, 212, 0.2), transparent 30%),
+                #07070a;
+        }
+
+        .video-container::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            padding: 1px;
+            background: linear-gradient(130deg, rgba(139, 92, 246, 0.7), rgba(6, 182, 212, 0.65));
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+
+        .live-pill {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 2;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(17, 24, 39, 0.76);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #d1fae5;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            opacity: 0.65;
+            transition: opacity 0.2s ease;
+        }
+
+        .live-pill::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #22c55e;
+            box-shadow: 0 0 12px #22c55e;
+        }
+
+        .live-pill.live {
+            opacity: 1;
+            animation: pulse 1.2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+            100% { transform: scale(1); }
+        }
+
+        img {
+            display: none;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .video-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            text-align: center;
+            color: #bfdbfe;
+            padding: 20px;
+            background: radial-gradient(circle at center, rgba(139, 92, 246, 0.22), rgba(7, 7, 10, 0.82));
+            transition: opacity 0.2s ease;
+        }
+
+        .video-placeholder svg {
+            width: 54px;
+            height: 54px;
+            opacity: 0.95;
+        }
+
+        .prediction-overlay {
+            position: absolute;
+            left: 12px;
+            bottom: 12px;
+            z-index: 2;
+            max-width: 84%;
+            border-radius: 12px;
+            padding: 9px 12px;
+            background: rgba(5, 8, 20, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            font-size: clamp(0.95rem, 1.4vw, 1.25rem);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #f0f9ff;
+        }
+
+        .control-stack {
+            display: grid;
+            gap: 14px;
+        }
+
+        .control-card,
+        .upload-card,
+        .status-card {
+            padding: 14px;
+        }
+
+        .card-title {
+            margin: 0 0 10px;
+            color: #c4b5fd;
+            font-size: 0.9rem;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        .btn-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .btn {
+            width: 100%;
+            border: 0;
+            border-radius: var(--radius-md);
+            padding: 12px 14px;
+            color: white;
+            font-size: 0.94rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+        }
+
+        .btn-start {
+            background: linear-gradient(180deg, var(--emerald), var(--emerald-dark));
+            box-shadow: 0 12px 22px rgba(16, 185, 129, 0.28);
+        }
+
+        .btn-stop {
+            background: linear-gradient(180deg, var(--rose), var(--rose-dark));
+            box-shadow: 0 12px 22px rgba(244, 63, 94, 0.25);
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-1px);
+        }
+
+        .btn:disabled {
+            opacity: 0.42;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        .result-box {
+            min-height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+            background: rgba(6, 182, 212, 0.08);
+            color: #a5f3fc;
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            transition: box-shadow 0.2s ease;
+        }
+
+        .result-box.live {
+            box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.4), 0 0 20px rgba(139, 92, 246, 0.2);
+        }
+
+        .sentence-box {
+            min-height: 70px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(3, 6, 18, 0.65);
+            color: #dbe7ff;
+            text-align: left;
+            padding: 12px 14px;
+            line-height: 1.55;
+            font-size: 0.93rem;
+        }
+
+        .upload-box {
+            border-radius: var(--radius-md);
+            background: rgba(4, 6, 18, 0.62);
+            border: 1px dashed rgba(6, 182, 212, 0.42);
+            padding: 12px;
+        }
+
+        .upload-box h3 {
+            margin: 0 0 10px;
+            color: #67e8f9;
+            font-size: 0.95rem;
+        }
+
+        .upload-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .file-wrap {
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            border-radius: var(--radius-md);
+            padding: 8px 10px;
+            background: rgba(11, 17, 32, 0.68);
+        }
+
+        .upload-row input[type="file"] {
+            width: 100%;
+            color: #cbd5e1;
+            font-size: 0.84rem;
+        }
+
+        .upload-result {
+            margin-top: 10px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(2, 6, 23, 0.65);
+            padding: 10px;
+            font-size: 0.84rem;
+            color: #cbd5e1;
+            line-height: 1.5;
+            max-height: 220px;
+            overflow: auto;
+            white-space: pre-wrap;
+        }
+
+        @media (max-width: 980px) {
+            .app-shell { padding: 16px; }
+            .topbar {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .subtitle { text-align: left; }
+            .dashboard-grid { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 560px) {
+            .welcome-card { border-radius: 20px; }
+            .btn-row,
+            .upload-row { grid-template-columns: 1fr; }
+            .prediction-overlay { font-size: 0.9rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <section class="welcome-screen" id="welcomeScreen">
+        <div class="welcome-card">
+            <span class="welcome-tag">Sign Language AI</span>
+            <h2 class="welcome-title">Nhận diện ngôn ngữ ký hiệu theo thời gian thực</h2>
+            <p class="welcome-desc">
+                Tăng tốc giao tiếp bằng AI thị giác máy tính. Sign Language phân tích cử chỉ tay trực tiếp từ camera
+                và chuyển đổi thành kết quả tức thì với trải nghiệm dashboard hiện đại, mượt mà.
+            </p>
+            <button class="hero-cta" onclick="enterExperience()">Trải nghiệm ngay</button>
+        </div>
+    </section>
+
+    <div class="app-shell is-hidden" id="mainDashboard">
+        <div class="topbar">
+            <h1>Sign Language AI Dashboard</h1>
+            <p class="subtitle">Real-time Sign Recognition • Smart Upload Analysis</p>
+        </div>
+
+        <div class="dashboard-grid">
+            <section class="card video-card" id="videoCard">
+                <div class="video-container">
+                    <span class="live-pill" id="liveDot">Live</span>
+                    <div class="video-placeholder" id="videoPlaceholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M15 10l4.6-2.3A1 1 0 0121 8.6v6.8a1 1 0 01-1.4.9L15 14"/>
+                            <rect x="3" y="6" width="12" height="12" rx="2"/>
+                        </svg>
+                        <strong>Camera chưa khởi chạy</strong>
+                        <span>Nhấn Bắt đầu quay để mở luồng video realtime.</span>
+                    </div>
+                    <img id="videoStream" src="" alt="Camera Feed">
+                    <div class="prediction-overlay" id="predictionText">SẴN SÀNG</div>
+                </div>
+            </section>
+
+            <aside class="control-stack">
+                <div class="card control-card">
+                    <h3 class="card-title">Điều khiển Camera</h3>
+                    <div class="btn-row">
+                        <button id="startBtn" class="btn btn-start" onclick="toggleCamera(true)">Bắt đầu quay</button>
+                        <button id="stopBtn" class="btn btn-stop" onclick="toggleCamera(false)" disabled>Dừng lại</button>
+                    </div>
+                </div>
+
+                <div class="card upload-card">
+                    <div class="upload-box">
+                        <h3>Test bằng Video Upload</h3>
+                        <div class="upload-row">
+                            <div class="file-wrap">
+                                <input id="videoFileInput" type="file" accept=".mp4,.avi,.mov,.mkv,.webm">
+                            </div>
+                            <button id="uploadBtn" class="btn btn-start" onclick="uploadVideoForTest()">Tải lên & Dự đoán</button>
+                        </div>
+                        <div id="uploadResult" class="upload-result">Chưa có kết quả.</div>
+                    </div>
+                </div>
+
+                <div class="card status-card">
+                    <h3 class="card-title">Chuỗi văn bản</h3>
+                    <div class="result-box" id="statusBadge">TRẠNG THÁI LIVE</div>
+                    <div class="sentence-box" id="sentenceText">Chuỗi văn bản: (chưa có từ)</div>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <script>
+        let fetchInterval = null;
+
+        function enterExperience() {
+            const welcome = document.getElementById('welcomeScreen');
+            const dashboard = document.getElementById('mainDashboard');
+
+            welcome.classList.add('hidden');
+            dashboard.classList.remove('is-hidden');
+        }
+
+        function clearPolling() {
+            if (fetchInterval !== null) {
+                clearInterval(fetchInterval);
+                fetchInterval = null;
+            }
+        }
+
+        function setUiRunning(running) {
+            document.getElementById('startBtn').disabled = running;
+            document.getElementById('stopBtn').disabled = !running;
+            document.getElementById('videoStream').style.display = running ? 'block' : 'none';
+            document.getElementById('videoPlaceholder').style.display = running ? 'none' : 'flex';
+            document.getElementById('videoCard').classList.toggle('active', running);
+            document.getElementById('predictionText').classList.toggle('live', running);
+            document.getElementById('statusBadge').classList.toggle('live', running);
+            document.getElementById('liveDot').classList.toggle('live', running);
+        }
+
+        function startPredictionPolling() {
+            clearPolling();
+            fetchInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/get_action');
+                    if (!response.ok) {
+                        throw new Error('Không đọc được trạng thái AI');
+                    }
+                    const data = await response.json();
+
+                    if (data.error) {
+                        document.getElementById('predictionText').innerText = data.error;
+                        return;
+                    }
+
+                    if (typeof data.action === 'string' && data.action.length > 0) {
+                        document.getElementById('predictionText').innerText = data.action;
+                    }
+
+                    if (typeof data.sentence === 'string') {
+                        document.getElementById('sentenceText').innerText =
+                            data.sentence.length > 0 ? `Chuỗi văn bản: ${data.sentence}` : 'Chuỗi văn bản: (chưa có từ)';
+                    }
+                } catch (error) {
+                    document.getElementById('predictionText').innerText = 'Mất kết nối tới server';
+                }
+            }, 300);
+        }
+
+        async function toggleCamera(isStarting) {
+            try {
+                const response = await fetch('/toggle', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action: isStarting ? 'start' : 'stop'})
+                });
+
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') {
+                    throw new Error(data.message || 'Toggle camera thất bại');
+                }
+
+                if (isStarting) {
+                    document.getElementById('predictionText').innerText = 'Đang tải Camera...';
+                    document.getElementById('sentenceText').innerText = 'Chuỗi văn bản: (đang thu...)';
+                    document.getElementById('videoStream').src = '/video_feed?' + Date.now();
+                    setUiRunning(true);
+                    startPredictionPolling();
+                } else {
+                    clearPolling();
+                    document.getElementById('videoStream').src = '';
+                    setUiRunning(false);
+                    document.getElementById('predictionText').innerText = 'ĐÃ DỪNG';
+                    document.getElementById('sentenceText').innerText = 'Chuỗi văn bản: (đã dừng)';
+                }
+            } catch (error) {
+                clearPolling();
+                document.getElementById('videoStream').src = '';
+                setUiRunning(false);
+                document.getElementById('predictionText').innerText = error.message || 'Không thể mở camera';
+            }
+        }
+
+        document.getElementById('videoStream').addEventListener('error', () => {
+            document.getElementById('videoPlaceholder').style.display = 'flex';
+            document.getElementById('predictionText').innerText = 'Luồng video lỗi hoặc camera không khả dụng';
+        });
+
+        window.addEventListener('beforeunload', () => {
+            clearPolling();
+        });
+
+        async function uploadVideoForTest() {
+            const fileInput = document.getElementById('videoFileInput');
+            const resultBox = document.getElementById('uploadResult');
+            const uploadBtn = document.getElementById('uploadBtn');
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                resultBox.innerText = 'Vui lòng chọn file video trước.';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('video', fileInput.files[0]);
+
+            uploadBtn.disabled = true;
+            resultBox.innerText = 'Đang tải lên và phân tích video...';
+
+            try {
+                const response = await fetch('/upload_video', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (!response.ok || data.status !== 'success') {
+                    throw new Error(data.message || 'Upload thất bại');
+                }
+
+                let text = '';
+                text += `Kết quả cuối: ${data.final_action}\n`;
+                text += `Độ tin cậy: ${(Number(data.final_confidence) * 100).toFixed(1)}%\n`;
+                text += `Thời lượng xử lý: ${data.duration_sec}s\n`;
+
+                if (Array.isArray(data.top_actions) && data.top_actions.length > 0) {
+                    text += '\nTop action:\n';
+                    data.top_actions.forEach((item, idx) => {
+                        text += `${idx + 1}. ${item.action} | score=${item.score} | count=${item.count}\n`;
+                    });
+                }
+
+                if (Array.isArray(data.samples) && data.samples.length > 0) {
+                    text += '\nMẫu theo thời gian:\n';
+                    data.samples.slice(0, 12).forEach((item) => {
+                        text += `t=${item.time_sec}s -> ${item.action} (${(Number(item.confidence) * 100).toFixed(1)}%)\n`;
+                    });
+                }
+
+                resultBox.innerText = text;
+            } catch (error) {
+                resultBox.innerText = error.message || 'Không thể phân tích video';
+            } finally {
+                uploadBtn.disabled = false;
+            }
+        }
+
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            const welcome = document.getElementById('welcomeScreen');
+            const dashboard = document.getElementById('mainDashboard');
+            welcome.style.transition = 'none';
+            dashboard.style.transition = 'none';
+        }
+    </script>
+
+</body>
+</html>
