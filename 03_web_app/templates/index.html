@@ -461,18 +461,25 @@
             font-size: 0.84rem;
         }
 
-        .upload-result {
-            margin-top: 10px;
+        /* Camera Canvas - removed, using inline styles instead */
+        
+        /* Status Badge */
+        #statusBadge {
+            padding: 8px 12px;
             border-radius: var(--radius-md);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: rgba(2, 6, 23, 0.65);
-            padding: 10px;
-            font-size: 0.84rem;
-            color: #cbd5e1;
-            line-height: 1.5;
-            max-height: 220px;
-            overflow: auto;
-            white-space: pre-wrap;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            background: rgba(244, 63, 94, 0.2);
+        }
+
+        #statusBadge #statusText {
+            color: var(--rose);
+        }
+
+        /* Live indicator pulse */
+        .live-indicator.pulse {
+            animation: pulse 1.5s ease-in-out infinite;
         }
 
         @media (max-width: 980px) {
@@ -494,6 +501,10 @@
     </style>
 </head>
 <body>
+
+    <!-- HIDDEN: Camera stream elements -->
+    <video id="cameraVideo" autoplay playsinline muted style="display:none;"></video>
+    <canvas id="videoCanvas" style="display:none;"></canvas>
 
     <section class="welcome-screen" id="welcomeScreen">
         <div class="welcome-card">
@@ -525,7 +536,8 @@
                         <strong>Camera chưa khởi chạy</strong>
                         <span>Nhấn Bắt đầu quay để mở luồng video realtime.</span>
                     </div>
-                    <img id="videoStream" src="" alt="Camera Feed">
+                    <!-- Canvas for displaying camera feed -->
+                    <canvas id="displayCanvas" width="640" height="480" style="position:absolute;inset:0;width:100%;height:100%;border-radius:16px;display:none;z-index:5;"></canvas>
                     <div class="prediction-overlay" id="predictionText">SẴN SÀNG</div>
                 </div>
             </section>
@@ -534,9 +546,10 @@
                 <div class="card control-card">
                     <h3 class="card-title">Điều khiển Camera</h3>
                     <div class="btn-row">
-                        <button id="startBtn" class="btn btn-start" onclick="toggleCamera(true)">Bắt đầu quay</button>
-                        <button id="stopBtn" class="btn btn-stop" onclick="toggleCamera(false)" disabled>Dừng lại</button>
+                        <button id="startBtn" class="btn btn-start">Bắt đầu quay</button>
+                        <button id="stopBtn" class="btn btn-stop" onclick="stopCameraStream()" disabled>Dừng lại</button>
                     </div>
+                    <button id="permissionBtn" class="btn btn-tertiary" style="width: 100%; margin-top: 10px;">🔓 Yêu cầu truy cập camera</button>
                 </div>
 
                 <div class="card upload-card">
@@ -553,15 +566,362 @@
                 </div>
 
                 <div class="card status-card">
-                    <h3 class="card-title">Chuỗi văn bản</h3>
-                    <div class="result-box" id="statusBadge">TRẠNG THÁI LIVE</div>
+                    <h3 class="card-title">Trạng thái & Chuỗi</h3>
+                    <div id="statusBadge" style="padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px; font-weight: 600; background: rgba(244, 63, 94, 0.2); margin-bottom: 10px;">
+                        <span id="statusText" style="color: var(--rose);">● Offline</span>
+                    </div>
                     <div class="sentence-box" id="sentenceText">Chuỗi văn bản: (chưa có từ)</div>
                 </div>
             </aside>
         </div>
     </div>
 
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script>
+        // ============ WEBSOCKET & CAMERA SETUP ============
+
+        // Initialize SocketIO
+        const socket = io();
+
+        // Camera & Canvas variables
+        let cameraVideo = null;
+        let displayCanvas = null;
+        let displayCtx = null;
+        let cameraStream = null;
+        let isStreamActive = false;
+        let frameInterval = null;
+        let cameraReady = false;
+
+        // Socket event handlers
+        socket.on('connect', function() {
+            console.log('[WebSocket] Connected to server');
+            updateStatusBadge('connected');
+        });
+
+        socket.on('disconnect', function() {
+            console.log('[WebSocket] Disconnected from server');
+            updateStatusBadge('disconnected');
+        });
+
+        socket.on('connection_response', function(data) {
+            console.log('[WebSocket] Server response:', data);
+        });
+
+        socket.on('prediction', function(data) {
+            console.log('[WebSocket] Prediction received:', data);
+            document.getElementById('predictionText').textContent = 
+                `${data.action} (${(data.confidence * 100).toFixed(1)}%)`;
+            const actionText = (data.action || '').trim();
+            const sentenceText = (data.sentence || '').trim();
+            const hasWord = actionText.length > 0 && !['Idle', '---', 'Waiting...', 'No pose detected'].includes(actionText);
+            document.getElementById('sentenceText').textContent =
+                sentenceText.length > 0
+                    ? `Chuỗi văn bản: ${sentenceText}`
+                    : (hasWord ? `Từ hiện tại: ${actionText}` : 'Chuỗi văn bản: (chưa có từ)');
+        });
+
+        socket.on('stream_status', function(data) {
+            console.log('[WebSocket] Stream status:', data.status);
+        });
+
+        socket.on('error', function(data) {
+            console.error('[WebSocket] Server error:', data.message);
+            showNotification(`Server: ${data.message}`, 'error');
+        });
+
+        // Status update function
+        function updateStatusBadge(status) {
+            const badge = document.getElementById('statusBadge');
+            const text = document.getElementById('statusText');
+            if (status === 'connected') {
+                badge.style.backgroundColor = 'rgba(16, 185, 129, 0.2)';
+                text.textContent = '● Online';
+                text.style.color = 'var(--emerald)';
+            } else {
+                badge.style.backgroundColor = 'rgba(244, 63, 94, 0.2)';
+                text.textContent = '● Offline';
+                text.style.color = 'var(--rose)';
+            }
+        }
+
+        // Initialize camera elements
+        function initCameraElements() {
+            cameraVideo = document.getElementById('cameraVideo');
+            displayCanvas = document.getElementById('displayCanvas');
+            
+            if (!displayCanvas) {
+                console.error('[Canvas] displayCanvas element not found!');
+                return false;
+            }
+            
+            displayCtx = displayCanvas.getContext('2d');
+            if (!displayCtx) {
+                console.error('[Canvas] Failed to get 2D context!');
+                return false;
+            }
+            
+            console.log('[Canvas] Initialized. Canvas element:', displayCanvas);
+            return true;
+        }
+
+        // Request browser camera permission
+        async function requestCameraPermission() {
+            try {
+                console.log('[Camera] Requesting permission...');
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: 'user'
+                    },
+                    audio: false
+                });
+                
+                cameraVideo.srcObject = cameraStream;
+                
+                // Ensure video plays
+                cameraVideo.play().catch(err => {
+                    console.error('[Camera] Play error:', err);
+                });
+                
+                cameraReady = true;
+                console.log('[Camera] Permission granted, stream initialized');
+                showNotification('Camera permission granted', 'success');
+                updateStatusBadge('connected');
+                return true;
+            } catch (err) {
+                console.error('[Camera] Permission denied or error:', err);
+                showNotification(`Camera error: ${err.message}`, 'error');
+                return false;
+            }
+        }
+
+        // Send frame to server via WebSocket
+        let frameCount = 0;
+        let lastLogTime = Date.now();
+        function sendFrameToServer() {
+            if (!cameraReady || !isStreamActive) {
+                if (frameCount === 1) console.warn('[Canvas] Stream not active or camera not ready');
+                return;
+            }
+            
+            if (!displayCtx) {
+                console.error('[Canvas] Display context is null!');
+                return;
+            }
+            
+            try {
+                // Check video status
+                if (cameraVideo.readyState < cameraVideo.HAVE_CURRENT_DATA) {
+                    if (frameCount % 10 === 0) {
+                        console.warn(`[Canvas] Video not ready. ReadyState: ${cameraVideo.readyState}, Playing: ${!cameraVideo.paused}`);
+                    }
+                    return;
+                }
+                
+                // Ensure canvas has proper dimensions
+                if (displayCanvas.width !== cameraVideo.videoWidth || 
+                    displayCanvas.height !== cameraVideo.videoHeight) {
+                    displayCanvas.width = cameraVideo.videoWidth;
+                    displayCanvas.height = cameraVideo.videoHeight;
+                    console.log(`[Canvas] Resized to ${displayCanvas.width}x${displayCanvas.height}`);
+                }
+                
+                // Clear and draw video frame
+                displayCtx.fillStyle = '#000000';
+                displayCtx.fillRect(0, 0, displayCanvas.width, displayCanvas.height);
+                displayCtx.drawImage(cameraVideo, 0, 0, displayCanvas.width, displayCanvas.height);
+                
+                // Convert to base64 and send
+                const base64Frame = displayCanvas.toDataURL('image/jpeg', 0.7);
+                
+                if (base64Frame && base64Frame.length > 100) {
+                    socket.emit('frame', {
+                        image: base64Frame,
+                        timestamp: Date.now()
+                    });
+                    
+                    frameCount++;
+                    
+                    // Log every 30 frames (~1 second at 30 FPS)
+                    if (frameCount % 30 === 0) {
+                        console.log(`[Canvas] ${frameCount} frames drawn & sent. Video dim: ${cameraVideo.videoWidth}x${cameraVideo.videoHeight}, Canvas dim: ${displayCanvas.width}x${displayCanvas.height}`);
+                    }
+                } else {
+                    console.error('[Canvas] Failed to convert canvas to base64. Length:', base64Frame?.length || 'null');
+                }
+            } catch (err) {
+                console.error('[Canvas] Frame send error:', err);
+            }
+        }
+
+        // Start camera stream
+        async function startCameraStream() {
+            console.log('[Camera] startCameraStream called');
+            
+            if (!cameraReady) {
+                console.log('[Camera] Camera not ready, requesting permission...');
+                const permitted = await requestCameraPermission();
+                if (!permitted) {
+                    console.log('[Camera] Permission denied');
+                    return;
+                }
+            }
+            
+            // Wait for video metadata to be loaded
+            if (cameraVideo.videoWidth === 0 || cameraVideo.videoHeight === 0) {
+                console.log('[Camera] Waiting for video metadata...');
+                await new Promise(resolve => {
+                    if (cameraVideo.videoWidth > 0) {
+                        resolve();
+                    } else {
+                        const handler = () => {
+                            console.log(`[Camera] Metadata loaded: ${cameraVideo.videoWidth}x${cameraVideo.videoHeight}`);
+                            cameraVideo.removeEventListener('loadedmetadata', handler);
+                            resolve();
+                        };
+                        cameraVideo.addEventListener('loadedmetadata', handler);
+                        // Timeout after 5 seconds
+                        setTimeout(() => {
+                            console.warn('[Camera] Metadata timeout, proceeding anyway');
+                            resolve();
+                        }, 5000);
+                    }
+                });
+            }
+            
+            isStreamActive = true;
+            
+            // Hide placeholder and show canvas - AGGRESSIVE APPROACH
+            const placeholder = document.getElementById('videoPlaceholder');
+            const canvas = document.getElementById('displayCanvas');
+            
+            console.log('[Canvas] Before visibility change - placeholder:', placeholder?.style.display, 'canvas:', canvas?.style.display);
+            
+            if (placeholder) {
+                placeholder.style.display = 'none';
+                placeholder.style.visibility = 'hidden';
+            }
+            
+            if (canvas) {
+                canvas.style.display = 'block';
+                canvas.style.visibility = 'visible';
+                canvas.style.opacity = '1';
+                console.log('[Canvas] After visibility change - display:', canvas.style.display, 'visibility:', canvas.style.visibility);
+            }
+            
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('liveDot').classList.add('pulse');
+            
+            // Initialize canvas with video dimensions
+            if (displayCanvas && cameraVideo.videoWidth > 0) {
+                displayCanvas.width = cameraVideo.videoWidth;
+                displayCanvas.height = cameraVideo.videoHeight;
+                console.log(`[Canvas] Pre-initialized to ${displayCanvas.width}x${displayCanvas.height}`);
+                
+                // Draw a test frame to verify canvas works
+                displayCtx.fillStyle = '#333333';
+                displayCtx.fillRect(0, 0, displayCanvas.width, displayCanvas.height);
+                displayCtx.fillStyle = '#FFFFFF';
+                displayCtx.font = '20px Arial';
+                displayCtx.fillText('Camera Loading...', 20, 30);
+                console.log('[Canvas] Test frame drawn');
+            }
+            
+            // Send start signal to server
+            socket.emit('start_stream');
+            console.log('[WebSocket] Sent start_stream event');
+            
+            // Start sending frames - ADD SMALL DELAY TO ENSURE CANVAS IS READY
+            setTimeout(() => {
+                if (frameInterval) clearInterval(frameInterval);
+                frameInterval = setInterval(sendFrameToServer, 33);
+                console.log('[Camera] Frame interval started - sending frames every 33ms (30 FPS)');
+            }, 100);
+            
+            showNotification('Camera stream started', 'success');
+        }
+
+        // Stop camera stream
+        function stopCameraStream() {
+            isStreamActive = false;
+            if (frameInterval) {
+                clearInterval(frameInterval);
+                frameInterval = null;
+            }
+            
+            const placeholder = document.getElementById('videoPlaceholder');
+            const canvas = document.getElementById('displayCanvas');
+            
+            if (placeholder) placeholder.style.display = 'flex';
+            if (canvas) canvas.style.display = 'none';
+            
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('liveDot').classList.remove('pulse');
+            
+            // Send stop signal to server
+            socket.emit('stop_stream');
+            console.log('[WebSocket] Sent stop_stream event');
+            
+            // Clear canvas
+            if (displayCtx && displayCanvas) {
+                displayCtx.fillStyle = '#0a0a0c';
+                displayCtx.fillRect(0, 0, displayCanvas.width, displayCanvas.height);
+            }
+            
+            console.log('[Camera] Stream stopped');
+            showNotification('Camera stream stopped', 'success');
+        }
+
+        // Stop all and release camera
+        function releaseCameraStream() {
+            stopCameraStream();
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
+            }
+            cameraReady = false;
+            console.log('[Camera] Camera released');
+        }
+
+        // Show notification helper
+        function showNotification(message, type = 'info') {
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+
+        // ============ EVENT LISTENERS ============
+
+        // Wait for DOM ready
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('[Page] DOM Content Loaded');
+            
+            const initSuccess = initCameraElements();
+            if (!initSuccess) {
+                console.error('[Page] Failed to initialize camera elements!');
+                return;
+            }
+            
+            // Verify canvas is in document
+            const canvas = document.getElementById('displayCanvas');
+            console.log('[Canvas] Element found:', canvas);
+            console.log('[Canvas] Initial display:', canvas.style.display);
+            console.log('[Canvas] Initial width:', canvas.width, 'height:', canvas.height);
+            
+            // Button listeners
+            document.getElementById('startBtn').addEventListener('click', startCameraStream);
+            document.getElementById('stopBtn').addEventListener('click', stopCameraStream);
+            document.getElementById('permissionBtn').addEventListener('click', requestCameraPermission);
+            
+            // Handle page unload
+            window.addEventListener('beforeunload', releaseCameraStream);
+            
+            console.log('[Page] Initialization complete');
+        });
+
+        // ============ EXISTING FUNCTIONS ============
+
         let fetchInterval = null;
 
         function enterExperience() {
@@ -571,96 +931,6 @@
             welcome.classList.add('hidden');
             dashboard.classList.remove('is-hidden');
         }
-
-        function clearPolling() {
-            if (fetchInterval !== null) {
-                clearInterval(fetchInterval);
-                fetchInterval = null;
-            }
-        }
-
-        function setUiRunning(running) {
-            document.getElementById('startBtn').disabled = running;
-            document.getElementById('stopBtn').disabled = !running;
-            document.getElementById('videoStream').style.display = running ? 'block' : 'none';
-            document.getElementById('videoPlaceholder').style.display = running ? 'none' : 'flex';
-            document.getElementById('videoCard').classList.toggle('active', running);
-            document.getElementById('predictionText').classList.toggle('live', running);
-            document.getElementById('statusBadge').classList.toggle('live', running);
-            document.getElementById('liveDot').classList.toggle('live', running);
-        }
-
-        function startPredictionPolling() {
-            clearPolling();
-            fetchInterval = setInterval(async () => {
-                try {
-                    const response = await fetch('/get_action');
-                    if (!response.ok) {
-                        throw new Error('Không đọc được trạng thái AI');
-                    }
-                    const data = await response.json();
-
-                    if (data.error) {
-                        document.getElementById('predictionText').innerText = data.error;
-                        return;
-                    }
-
-                    if (typeof data.action === 'string' && data.action.length > 0) {
-                        document.getElementById('predictionText').innerText = data.action;
-                    }
-
-                    if (typeof data.sentence === 'string') {
-                        document.getElementById('sentenceText').innerText =
-                            data.sentence.length > 0 ? `Chuỗi văn bản: ${data.sentence}` : 'Chuỗi văn bản: (chưa có từ)';
-                    }
-                } catch (error) {
-                    document.getElementById('predictionText').innerText = 'Mất kết nối tới server';
-                }
-            }, 300);
-        }
-
-        async function toggleCamera(isStarting) {
-            try {
-                const response = await fetch('/toggle', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({action: isStarting ? 'start' : 'stop'})
-                });
-
-                const data = await response.json();
-                if (!response.ok || data.status !== 'success') {
-                    throw new Error(data.message || 'Toggle camera thất bại');
-                }
-
-                if (isStarting) {
-                    document.getElementById('predictionText').innerText = 'Đang tải Camera...';
-                    document.getElementById('sentenceText').innerText = 'Chuỗi văn bản: (đang thu...)';
-                    document.getElementById('videoStream').src = '/video_feed?' + Date.now();
-                    setUiRunning(true);
-                    startPredictionPolling();
-                } else {
-                    clearPolling();
-                    document.getElementById('videoStream').src = '';
-                    setUiRunning(false);
-                    document.getElementById('predictionText').innerText = 'ĐÃ DỪNG';
-                    document.getElementById('sentenceText').innerText = 'Chuỗi văn bản: (đã dừng)';
-                }
-            } catch (error) {
-                clearPolling();
-                document.getElementById('videoStream').src = '';
-                setUiRunning(false);
-                document.getElementById('predictionText').innerText = error.message || 'Không thể mở camera';
-            }
-        }
-
-        document.getElementById('videoStream').addEventListener('error', () => {
-            document.getElementById('videoPlaceholder').style.display = 'flex';
-            document.getElementById('predictionText').innerText = 'Luồng video lỗi hoặc camera không khả dụng';
-        });
-
-        window.addEventListener('beforeunload', () => {
-            clearPolling();
-        });
 
         async function uploadVideoForTest() {
             const fileInput = document.getElementById('videoFileInput');

@@ -1,4 +1,5 @@
 from flask import Flask, render_template, Response, request, jsonify
+from flask_socketio import SocketIO, emit
 import cv2
 import numpy as np
 import os
@@ -8,6 +9,8 @@ import threading
 import logging
 import importlib.util
 from queue import Queue, Empty, Full
+from base64 import b64decode
+import base64
 import tensorflow as tf
 from collections import Counter, defaultdict
 from werkzeug.utils import secure_filename
@@ -28,6 +31,9 @@ except ImportError:
 
 app = Flask(__name__)
 
+# Initialize SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mutemotion-web")
 
@@ -41,6 +47,12 @@ camera_lock = threading.Lock()
 model_lock = threading.Lock()
 predict_worker_lock = threading.Lock()
 landmark_lock = threading.Lock()
+
+# ============ WEBSOCKET GLOBALS ============
+websocket_frame_queue = Queue(maxsize=2)  # Keep recent frame only
+websocket_connected_clients = set()
+websocket_predict_worker_thread = None
+websocket_worker_running = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
@@ -531,6 +543,199 @@ def extract_1659_landmarks(results):
     flat_landmarks = landmarks.flatten()
     return np.concatenate([flat_landmarks[0:99], flat_landmarks[1533:1659]])
 
+# ============ WEBSOCKET EVENTS ============
+
+@socketio.on('connect')
+def handle_connect():
+    """Client vừa kết nối WebSocket"""
+    client_id = request.sid
+    websocket_connected_clients.add(client_id)
+    logger.info(f"[WebSocket] Client {client_id} connected. Total: {len(websocket_connected_clients)}")
+    emit('connection_response', {'status': 'connected', 'message': 'Server ready'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Client ngắt kết nối"""
+    client_id = request.sid
+    websocket_connected_clients.discard(client_id)
+    logger.info(f"[WebSocket] Client {client_id} disconnected. Total: {len(websocket_connected_clients)}")
+
+@socketio.on('frame')
+def handle_frame(data):
+    """
+    Nhận frame từ client (base64 encoded JPEG)
+    Expected data format: {'image': 'data:image/jpeg;base64,...', 'timestamp': 1234567890}
+    """
+    try:
+        if not data or 'image' not in data:
+            emit('error', {'message': 'Invalid frame data'})
+            return
+        
+        # Decode base64 frame
+        base64_string = data['image']
+        if ',' in base64_string:
+            base64_string = base64_string.split(',')[1]
+        
+        frame_data = b64decode(base64_string)
+        frame_array = np.frombuffer(frame_data, dtype=np.uint8)
+        frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            emit('error', {'message': 'Failed to decode frame'})
+            return
+        
+        # Enqueue frame (drop oldest if full)
+        try:
+            websocket_frame_queue.put_nowait(frame)
+        except Full:
+            try:
+                websocket_frame_queue.get_nowait()
+                websocket_frame_queue.put_nowait(frame)
+            except Empty:
+                websocket_frame_queue.put_nowait(frame)
+                
+    except Exception as e:
+        logger.error(f"[WebSocket] Frame processing error: {str(e)}")
+        emit('error', {'message': f'Frame error: {str(e)}'})
+
+@socketio.on('start_stream')
+def handle_start_stream():
+    """Client yêu cầu bắt đầu stream"""
+    global camera_active, latest_sentence, sentence_words
+    with camera_lock:
+        camera_active = True
+        latest_sentence = ""
+        sentence_words = []
+    logger.info("[WebSocket] Stream started by client")
+    emit('stream_status', {'status': 'started'})
+    start_websocket_predict_worker()
+
+@socketio.on('stop_stream')
+def handle_stop_stream():
+    """Client yêu cầu dừng stream"""
+    global camera_active
+    with camera_lock:
+        camera_active = False
+    logger.info("[WebSocket] Stream stopped by client")
+    emit('stream_status', {'status': 'stopped'})
+    stop_websocket_predict_worker()
+
+# ============ WEBSOCKET PREDICT WORKER ============
+
+def _websocket_predict_worker_loop():
+    """
+    Background worker: Lấy frame từ websocket_frame_queue
+    → Run prediction → Broadcast results to all clients
+    """
+    global websocket_worker_running, camera_active, latest_sentence, sentence_words, latest_action, latest_confidence
+    
+    predict_interval = 1.0  # seconds - emit prediction every ~1s
+    last_predict_time = 0.0
+    sequence = []
+    ema_probs = None
+    previous_action = "---"
+    last_word_append_ts = time.time()
+
+    with mp_holistic.Holistic(
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+        refine_face_landmarks=False,
+    ) as holistic:
+        while websocket_worker_running:
+            try:
+                # Get frame từ queue
+                frame = websocket_frame_queue.get(timeout=0.1)
+
+                img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img_rgb.flags.writeable = False
+                results = holistic.process(img_rgb)
+
+                # Always append keypoints so sequence length is stable (missing parts become zeros)
+                keypoints = extract_1659_landmarks(results)
+                sequence.append(keypoints)
+                sequence = sequence[-30:]
+
+                current_time = time.time()
+                if len(sequence) < 30 or (current_time - last_predict_time) < predict_interval:
+                    continue
+
+                try:
+                    with model_lock:
+                        raw_probs = model.predict(np.expand_dims(sequence, axis=0), verbose=0)[0]
+
+                    action, confidence, ema_probs, _ = predict_action_from_probs(
+                        raw_probs,
+                        previous_action,
+                        sequence,
+                        results,
+                        ema_probs,
+                    )
+                    previous_action = action
+
+                    now = time.time()
+                    if (now - last_word_append_ts) >= WORD_APPEND_INTERVAL_SECONDS:
+                        probs_for_sentence = np.copy(ema_probs if ema_probs is not None else raw_probs)
+                        if sentence_words and IDLE_ID is not None:
+                            probs_for_sentence[IDLE_ID] = -1.0
+
+                        _, sentence_word, _ = select_sentence_word(
+                            probs_for_sentence,
+                            sentence_words,
+                        )
+
+                        if sentence_word is not None and sentence_word not in ("---", "Idle", "Waiting..."):
+                            sentence_words.append(sentence_word)
+                            latest_sentence = " ".join(sentence_words)
+
+                        last_word_append_ts = now
+
+                    with camera_lock:
+                        latest_action = action
+                        latest_confidence = confidence
+
+                    socketio.emit('prediction', {
+                        'action': action,
+                        'confidence': confidence,
+                        'sentence': latest_sentence,
+                        'timestamp': current_time
+                    }, to=list(websocket_connected_clients))
+
+                    logger.info("[WebSocket] Prediction: %s (%.2f%%)", action, confidence * 100.0)
+
+                except Exception as e:
+                    logger.error(f"[WebSocket] Prediction error: {str(e)}")
+                    socketio.emit('error', {
+                        'message': f'Prediction failed: {str(e)}'
+                    }, to=list(websocket_connected_clients))
+
+                last_predict_time = current_time
+
+            except Empty:
+                continue
+            except Exception as e:
+                logger.error(f"[WebSocket] Worker error: {str(e)}")
+                time.sleep(0.1)
+
+def start_websocket_predict_worker():
+    """Khởi động worker thread"""
+    global websocket_predict_worker_thread, websocket_worker_running
+    if websocket_predict_worker_thread is None or not websocket_predict_worker_thread.is_alive():
+        websocket_worker_running = True
+        websocket_predict_worker_thread = threading.Thread(
+            target=_websocket_predict_worker_loop,
+            daemon=True
+        )
+        websocket_predict_worker_thread.start()
+        logger.info("[WebSocket] Predict worker started")
+
+def stop_websocket_predict_worker():
+    """Dừng worker thread"""
+    global websocket_worker_running
+    websocket_worker_running = False
+    if websocket_predict_worker_thread and websocket_predict_worker_thread.is_alive():
+        websocket_predict_worker_thread.join(timeout=2)
+    logger.info("[WebSocket] Predict worker stopped")
+
 def _enqueue_latest_frame(frame_bgr):
     global predict_queue
     if predict_queue is None:
@@ -850,4 +1055,14 @@ def upload_video():
             os.remove(save_path)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    # Start WebSocket predict worker
+    start_websocket_predict_worker()
+    
+    # Run Flask + SocketIO
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=5000,
+        debug=False,
+        allow_unsafe_werkzeug=True
+    )
